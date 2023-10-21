@@ -19,6 +19,7 @@
 #include <profile_server.h>
 #include <gap_msg.h>
 
+#include "rtl876x_pinmux.h"
 #if F_BT_DLPS_EN
 #include <dlps.h>
 #include <rtl876x_io_dlps.h>
@@ -28,7 +29,7 @@
 #include "app_task.h"
 #include "peripheral_app.h"
 #include "uart.h"
-
+#include "board.h"
 
 /** @defgroup  PERIPH_DEMO_MAIN Peripheral Main
     * @brief Main file to initialize hardware and BT stack and start task scheduling
@@ -101,9 +102,15 @@ void app_le_gap_init(void)
     uint8_t  adv_direct_addr[GAP_BD_ADDR_LEN] = {0};
     uint8_t  adv_chann_map = GAP_ADVCHAN_ALL;
     uint8_t  adv_filter_policy = GAP_ADV_FILTER_ANY;
-    uint16_t adv_int_min = DEFAULT_ADVERTISING_INTERVAL_MIN;
-    uint16_t adv_int_max = DEFAULT_ADVERTISING_INTERVAL_MAX;
-
+    
+    #if F_BT_DLPS_EN
+        uint16_t adv_int_min = 0x2000;
+        uint16_t adv_int_max = 0x2000;
+    #else
+        uint16_t adv_int_min = DEFAULT_ADVERTISING_INTERVAL_MIN;
+        uint16_t adv_int_max = DEFAULT_ADVERTISING_INTERVAL_MAX;
+    #endif
+    
     /* GAP Bond Manager parameters */
     #if SIMP_SRV_AUTHEN_EN
         uint8_t  auth_pair_mode = GAP_PAIRING_MODE_PAIRABLE;
@@ -178,6 +185,8 @@ void app_le_profile_init(void)
  */
 void board_init(void)
 {
+    // Pad_Config() can be added here
+    
     board_uart_init();
 }
 
@@ -193,8 +202,14 @@ void driver_init(void)
         baudrate = 9600;
         ftl_save(&baudrate, FTL_APP_STORE_BAUDRATE_OFFSET, 4);
     }
-    driver_uart_init(baudrate);
-
+    
+    #if F_BT_DLPS_EN
+        uart_baudrate_target = baudrate;
+        uart_config_dlps(true);
+    #else
+        driver_uart_init(baudrate);
+    #endif
+    
     le_adv_set_tx_power(GAP_ADV_TX_POW_SET_1M, 0xD0); //7.5 dBm
 }
 
@@ -202,19 +217,27 @@ void driver_init(void)
  * @brief    Contains the power mode settings
  * @return   void
  */
+bool dlps_check_cb(void)
+{
+    return app_allowed_enter_dlps;
+}
+
 void io_dlps_enter_cb(void)
 {
-
+    
 }
 
 void io_dlps_exit_cb(void)
 {
-
+    
 }
 
 void pwr_mgr_init(void)
 {
 #if F_BT_DLPS_EN
+    if (! dlps_check_cb_reg(dlps_check_cb))
+        DBG_DIRECT("Error: dlps_check_cb_reg(dlps_check_cb) failed!");
+		
     DLPS_IORegUserDlpsEnterCb(io_dlps_enter_cb);
     DLPS_IORegUserDlpsExitCb(io_dlps_exit_cb);
     DLPS_IORegister();

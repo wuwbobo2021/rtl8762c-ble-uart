@@ -19,6 +19,7 @@ extern "C" {
  *                              Variables
  *============================================================================*/
 extern T_SERVER_ID simp_srv_id; /**< Simple ble service id*/
+extern volatile bool app_allowed_enter_dlps;
 
 /*============================================================================*
  *                              Functions

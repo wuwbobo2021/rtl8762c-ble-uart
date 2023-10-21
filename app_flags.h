@@ -5,22 +5,18 @@
 #ifndef _APP_FLAGS_H_
 #define _APP_FLAGS_H_
 
+#define APP_MAX_LINKS  1 // value of 2 or above might not work
 
-/** @defgroup  PERIPH_Config Peripheral App Configuration
-    * @brief This file is used to config app functions.
-    * @{
-    */
-/*============================================================================*
- *                              Constants
- *============================================================================*/
+#define F_BT_DLPS_EN   0 // if enabled, Rx data will not be received when the device is disconnected
 
-/** @brief  Config APP LE link number */
-#define APP_MAX_LINKS  1
-/** @brief  Config DLPS: 0-Disable DLPS, 1-Enable DLPS */
-#define F_BT_DLPS_EN  0 //currently doesn't work
+#if F_BT_DLPS_EN
+    // output low/high on the selected pin when BLE is connected/disconnected
+	#define BT_CTRL_SWITCH_EN  0
+#endif
 
-// PIN range: 0 ~ 999,999
-//#define AUTHEN_FIXED_PIN 123456
+// uncomment the line below to enable fixed PIN authentication
+//#define AUTHEN_FIXED_PIN 123456 // range: 0 ~ 999,999
+#define AUTHEN_RETRY_CNT 3 // never accept any connection once it is reached
 
 #ifdef AUTHEN_FIXED_PIN
     #define SIMP_SRV_AUTHEN_EN 1

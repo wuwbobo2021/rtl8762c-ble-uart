@@ -24,6 +24,7 @@ BIN_DIR = bin
 # C sources
 C_SOURCES =  \
 $(SDK_DIR)/src/mcu/rtl876x/system_rtl8762c.c \
+$(SDK_DIR)/src/mcu/peripheral/rtl876x_io_dlps.c \
 $(SDK_DIR)/src/mcu/peripheral/rtl876x_rcc.c \
 $(SDK_DIR)/src/mcu/peripheral/rtl876x_uart.c \
 ./simple_ble_service.c \

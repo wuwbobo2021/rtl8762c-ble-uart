@@ -9,8 +9,14 @@
 extern "C" {
 #endif
 
-#define UART_TX_PIN                P3_0 //P2_7
-#define UART_RX_PIN                P3_1 //P2_6
+#define UART_TX_PIN                P3_0
+#define UART_RX_PIN                P3_1
+
+#if BT_CTRL_SWITCH_EN
+	#define BT_CTRL_SWITCH_PIN     P2_5
+	#define BT_CTRL_SWITCH_CONN    PAD_OUT_LOW
+    #define BT_CTRL_SWITCH_DISC    PAD_OUT_HIGH
+#endif
 
 /* if use user define dlps enter/dlps exit callback function */
 #define USE_USER_DEFINE_DLPS_EXIT_CB      1

@@ -11,12 +11,12 @@ Currently this program differs from the vendor's datatrans application in some w
 - baud rate is freely configurable via BLE, while the vendor's datatrans supports selecting a value from the table via the UART (AT interface) itself;
 - this BLE peripheral can be discovered by Android 8.0 while the vendor's datatrans (v2.1.6.0, 2023-3-22) might not be discovered by Android 8.0 or above versions, that's probably caused by wrong structure length data of the advertisement packet;
 - UART Tx/Rx pins can be changed in `board.h` (comparing with the vendor's rock-solid datatrans binary package);
+- UART is disabled when DLPS power-saving mode is enabled and BLE is disconnected, and a pin can be selected to output low/high when BLE is connected/disconnected;
 - UART AT interface, UART hardware flow control and bluetooth flow control are not available;
 - sending data from BLE master to UART Tx is done in the `app` main task, which might be inefficient;
 - UART Rx data transfer is not designed for maximum speed: UART receive buffer (4KB) is not implemented as a circular FIFO, and no data is sent before Rx Idle event, thus overflow is more likely to happen when transfering large bulks of data;
 - Bluetooth device name is generated from the MAC address and cannot be changed;
 - PIN/just-work pairing mode can only be configured in `app_flags.h` and is fixed at runtime;
-- BLE Tx power is fixed at 7.5 dBm, and DLPS power-saving mode cannot be opened just like datatrans.
 
 Why did I choose this chip instead of others with SPP? because it is cheaper and I've got plenty of them.
 
@@ -44,3 +44,5 @@ Extract source code files of rtl8762c-ble-uart into a folder, place this folder 
 Flash it into the chip (address 0x0080E000) via the UART interface, with the Log pin pulled down when it is powered on.
 
 BeeMPTool from the vendor can be used on Windows, otherwise check the [rtltool program](https://github.com/wuwbobo2021/rtltool), which was forked from [cyber-murmel's program](https://github.com/cyber-murmel/rtltool) only to make downloading of BeeMPTool optional.
+
+`ROM_Patch_1.0.611.1.bin` (0x00803000) and `configFile_2023.03.17.15.bin` (0x00801000) were extracted from the vendor's datatrans binary package (512B of checksum is removed for rtltool), flashing them can solve the problem related to DLPS mode. The MAC address `54 00 12 02 E0 00` (`54 00 12` might be the vendor ID) in the configFile can be changed to some other value. If you are using BeeMPTool, just flash the whole datatrans at first.

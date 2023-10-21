@@ -33,7 +33,7 @@ void board_uart_init(void)
 {
     Pad_Config(UART_TX_PIN, PAD_PINMUX_MODE, PAD_IS_PWRON, PAD_PULL_UP, PAD_OUT_DISABLE, PAD_OUT_HIGH);
     Pad_Config(UART_RX_PIN, PAD_PINMUX_MODE, PAD_IS_PWRON, PAD_PULL_UP, PAD_OUT_DISABLE, PAD_OUT_HIGH);
-
+    
     Pinmux_Deinit(UART_TX_PIN);
     Pinmux_Deinit(UART_RX_PIN);
 
@@ -83,6 +83,41 @@ bool driver_uart_init(uint32_t baudrate)
     os_mutex_give(mutex_uart);
     return true;
 }
+
+#if F_BT_DLPS_EN
+void uart_config_dlps(bool enter_dlps)
+{
+    DBG_DIRECT("uart.c: config dlps: %d", enter_dlps);
+    
+    if (! enter_dlps) {
+        board_uart_init();
+        driver_uart_init(uart_baudrate_target);
+        #if BT_CTRL_SWITCH_EN
+            Pad_Config(BT_CTRL_SWITCH_PIN, PAD_SW_MODE, PAD_IS_PWRON, PAD_PULL_NONE, PAD_OUT_ENABLE, BT_CTRL_SWITCH_CONN);
+        #endif
+        return;
+    }
+    
+    uart_rx_count = 0; flag_rx_data_available = false;
+    
+    NVIC_InitTypeDef NVIC_InitStruct;
+    NVIC_InitStruct.NVIC_IRQChannel = UART0_IRQn;
+    NVIC_InitStruct.NVIC_IRQChannelCmd = (FunctionalState)DISABLE;
+    NVIC_InitStruct.NVIC_IRQChannelPriority = 3;
+    NVIC_Init(&NVIC_InitStruct);
+    
+    uart_rx_count = 0; flag_rx_data_available = false;
+    
+    #if BT_CTRL_SWITCH_EN
+        Pad_Config(BT_CTRL_SWITCH_PIN, PAD_SW_MODE, PAD_IS_PWRON, PAD_PULL_NONE, PAD_OUT_ENABLE, BT_CTRL_SWITCH_DISC);
+        Pad_Config(UART_TX_PIN, PAD_SW_MODE, PAD_NOT_PWRON, PAD_PULL_NONE, PAD_OUT_DISABLE, PAD_OUT_HIGH);
+        Pad_Config(UART_RX_PIN, PAD_SW_MODE, PAD_NOT_PWRON, PAD_PULL_NONE, PAD_OUT_DISABLE, PAD_OUT_HIGH);
+    #else
+        Pad_Config(UART_TX_PIN, PAD_SW_MODE, PAD_IS_PWRON, PAD_PULL_UP, PAD_OUT_DISABLE, PAD_OUT_HIGH);
+        Pad_Config(UART_RX_PIN, PAD_SW_MODE, PAD_NOT_PWRON, PAD_PULL_NONE, PAD_OUT_DISABLE, PAD_OUT_HIGH);
+    #endif
+}
+#endif
 
 static inline void uart_flush(void)
 {

@@ -38,6 +38,11 @@
 uint8_t simp_conn_id;
 T_SERVER_ID simp_srv_id; /**< Simple ble service instance id*/
 /** @} */ /* End of group PERIPH_SEVER_CALLBACK */
+
+volatile bool app_allowed_enter_dlps = true;
+volatile uint8_t cnt_pairing_failed = 0;
+
+
 /** @defgroup  PERIPH_GAP_MSG GAP Message Handler
     * @brief Handle GAP Message
     * @{
@@ -108,6 +113,11 @@ void app_handle_dev_state_evt(T_GAP_DEV_STATE new_state, uint16_t cause)
             if (new_state.gap_adv_sub_state == GAP_ADV_TO_IDLE_CAUSE_CONN)
             {
                 APP_PRINT_INFO0("GAP adv stoped: because connection created");
+                #if F_BT_DLPS_EN
+                    app_allowed_enter_dlps = false;
+                    uart_config_dlps(false);
+                #endif
+				app_clear_uart_rx_data();
             }
             else
             {
@@ -117,6 +127,9 @@ void app_handle_dev_state_evt(T_GAP_DEV_STATE new_state, uint16_t cause)
         else if (new_state.gap_adv_state == GAP_ADV_STATE_ADVERTISING)
         {
             APP_PRINT_INFO0("GAP adv start");
+            #if F_BT_DLPS_EN
+                app_allowed_enter_dlps = true;
+            #endif
         }
     }
 
@@ -145,8 +158,19 @@ void app_handle_conn_state_evt(uint8_t conn_id, T_GAP_CONN_STATE new_state, uint
             {
                 APP_PRINT_ERROR1("app_handle_conn_state_evt: connection lost cause 0x%x", disc_cause);
             }
+            #if F_BT_DLPS_EN
+                uart_config_dlps(true);
+            #endif
             app_clear_uart_rx_data();
-            le_adv_start();
+            
+            #if SIMP_SRV_AUTHEN_EN
+                if (cnt_pairing_failed < AUTHEN_RETRY_CNT)
+                    le_adv_start();
+                else
+                    app_allowed_enter_dlps = true; //sleep until powered off
+            #else
+                le_adv_start();
+            #endif
         }
         break;
 
@@ -159,7 +183,8 @@ void app_handle_conn_state_evt(uint8_t conn_id, T_GAP_CONN_STATE new_state, uint
             T_GAP_REMOTE_ADDR_TYPE remote_bd_type;
             
             #if SIMP_SRV_AUTHEN_EN
-            le_bond_pair(conn_id);
+                if (cnt_pairing_failed < AUTHEN_RETRY_CNT)
+                    le_bond_pair(conn_id);
             #endif
             
             simp_conn_id = conn_id;
@@ -207,10 +232,11 @@ void app_handle_authen_state_evt(uint8_t conn_id, uint8_t new_state, uint16_t ca
             if (cause == GAP_SUCCESS)
             {
                 APP_PRINT_INFO0("app_handle_authen_state_evt: GAP_AUTHEN_STATE_COMPLETE pair success");
-
+                cnt_pairing_failed = 0;
             }
             else
             {
+                cnt_pairing_failed++;
                 APP_PRINT_INFO0("app_handle_authen_state_evt: GAP_AUTHEN_STATE_COMPLETE pair failed");
             }
         }
@@ -218,6 +244,7 @@ void app_handle_authen_state_evt(uint8_t conn_id, uint8_t new_state, uint16_t ca
 
     default:
         {
+            cnt_pairing_failed++;
             APP_PRINT_ERROR1("app_handle_authen_state_evt: unknown newstate %d", new_state);
         }
         break;
@@ -561,7 +588,7 @@ T_APP_RESULT app_profile_callback(T_SERVER_ID service_id, void *p_data)
 
 /** @} */ /* End of group PERIPH_SEVER_CALLBACK */
 
-// in the vendor's datatrans code, a loop is executed until
+// in the vendor's DataTrans code, a loop is executed until
 // the data is all transfered, without checking for "remain credits":
 // le_get_gap_param(GAP_PARAM_LE_REMAIN_CREDITS, &credits)
 // in fact server_send_data() cannot be called for more than
@@ -569,7 +596,7 @@ T_APP_RESULT app_profile_callback(T_SERVER_ID service_id, void *p_data)
 // the vendor's program doesn't wait for Rx IDLE before transfering
 // data through BLE, so that might be okay.
 
-// here the problem waits for PROFILE_EVT_SEND_DATA_COMPLETE
+// here the program waits for PROFILE_EVT_SEND_DATA_COMPLETE
 // in app_profile_callback() before sending the next MTU of data.
 // this callback is executed in the same `app` task, thus the
 // app_handle_uart_rx() cannot stay in a loop waiting for a flag
