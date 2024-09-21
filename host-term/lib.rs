@@ -47,7 +47,7 @@ enum BleHdlMsg {
 type PinnedMsgStream = Pin<Box<dyn tokio_stream::Stream<Item = BleHdlMsg> + Send>>;
 
 struct BleSerialRes {
-    rt: Option<tokio::runtime::Runtime>, //becomes none only when dropping
+    rt: Option<tokio::runtime::Runtime>,
     dev_addr: BDAddr, //cannot be changed
     dev_name: Option<String>,
     baud_rate: u32,
@@ -66,7 +66,9 @@ impl BleSerial {
         let dev_addr = BDAddr::from_str_delim(device_bt_addr)
             .map_err(|_| "error parsing device address")?;
 
-        let rt = tokio::runtime::Runtime::new()
+        // the default Runtime::new() will create a thread for each CPU core (too many threads)
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2).enable_all().build() // are 2 worker threads really needed?
             .map_err(|_| "can't create async runtime required by the bluetooth library")?;
 
         let res = BleSerialRes {
@@ -271,7 +273,6 @@ impl BleSerial {
             ).await.is_err() {
                 #[cfg(feature = "ble_dbg")]
                     println!("ble_loop(): failed to write conf desc of char_read.");
-                continue;
             }
             
             // create UART read notification stream
