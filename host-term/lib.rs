@@ -1,13 +1,23 @@
 // by wuwbobo2021 <wuwbobo@outlook.com>
 // for use with <https://github.com/wuwbobo2021/rtl8762c-ble-uart>
 
-const UUID_SERV:       Uuid = uuid_from_u16(0xA00A);
+const UUID_SERV: Uuid = bluetooth_uuid_from_u16(0xA00A);
 
-const UUID_CHAR_BAUD:  Uuid = uuid_from_u16(0xB001);
-const UUID_CHAR_READ:  Uuid = uuid_from_u16(0xB003);
-const UUID_CHAR_WRITE: Uuid = uuid_from_u16(0xB002);
+const UUID_CHAR_BAUD: Uuid = bluetooth_uuid_from_u16(0xB001);
+const UUID_CHAR_READ: Uuid = bluetooth_uuid_from_u16(0xB003);
+const UUID_CHAR_WRITE: Uuid = bluetooth_uuid_from_u16(0xB002);
 
-const UUID_DESC_CLIENT_CHAR_CONF: Uuid = uuid_from_u16(0x2902);
+const UUID_DESC_CLIENT_CHAR_CONF: Uuid = bluetooth_uuid_from_u16(0x2902);
+
+#[cfg(feature = "debug")]
+macro_rules! debug {
+    ($($arg:tt)+) => (eprintln!($($arg)+))
+}
+
+#[cfg(not(feature = "debug"))]
+macro_rules! debug {
+    ($($arg:tt)+) => {};
+}
 
 use std::{
     collections::VecDeque,
@@ -15,18 +25,11 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, SystemTime}
+    time::{Duration, SystemTime},
 };
-use btleplug::api::{
-    bleuuid::uuid_from_u16,
-    BDAddr,
-    Central,
-    Characteristic,
-    Manager as _,
-    Peripheral as _,
-    WriteType
-};
-use btleplug::platform::Peripheral;
+
+use bluest::{btuuid::bluetooth_uuid_from_u16, Characteristic};
+
 use futures::StreamExt;
 use uuid::Uuid;
 
@@ -34,26 +37,26 @@ pub enum BleSerialEvent {
     Connect,
     Disconnect,
     Receive(Vec<u8>),
-    WriteFailed(Vec<u8>)
+    WriteFailed(Vec<u8>),
 }
 
 enum BleHdlMsg {
     ReqSetBaud(u32),
     ReqWrite(Vec<u8>),
     ReqDrop,
-    ReadNotify(btleplug::api::ValueNotification),
+    ReadNotify(Vec<u8>),
     Timer,
 }
 type PinnedMsgStream = Pin<Box<dyn tokio_stream::Stream<Item = BleHdlMsg> + Send>>;
 
 struct BleSerialRes {
     rt: Option<tokio::runtime::Runtime>,
-    dev_addr: BDAddr, //cannot be changed
+    dev_addr: String, //cannot be changed
     dev_name: Option<String>,
     baud_rate: u32,
     buf_read: VecDeque<u8>,
     ch_req: Option<tokio::sync::mpsc::UnboundedSender<BleHdlMsg>>,
-    on_event: Arc<Box<dyn Fn(BleSerialEvent) + 'static + Send + Sync>>
+    on_event: Arc<Box<dyn Fn(BleSerialEvent) + 'static + Send + Sync>>,
 }
 
 pub struct BleSerial {
@@ -63,32 +66,35 @@ pub struct BleSerial {
 
 impl BleSerial {
     pub fn build(device_bt_addr: &str, read_timeout: Duration) -> Result<Self, &'static str> {
-        let dev_addr = BDAddr::from_str_delim(device_bt_addr)
-            .map_err(|_| "error parsing device address")?;
-
         // the default Runtime::new() will create a thread for each CPU core (too many threads)
         let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2).enable_all().build() // are 2 worker threads really needed?
+            .worker_threads(2)
+            .enable_all()
+            .build()
             .map_err(|_| "can't create async runtime required by the bluetooth library")?;
 
         let res = BleSerialRes {
             rt: Some(rt),
-            dev_addr,
+            dev_addr: device_bt_addr.to_string(),
             dev_name: None,
             baud_rate: 9600_u32,
             buf_read: VecDeque::<u8>::new(),
             ch_req: None,
-            on_event: Arc::new(Box::new(|_| {}))
+            on_event: Arc::new(Box::new(|_| {})),
         };
         let arc_res = Arc::new(Mutex::new(res));
         let arc_res_2 = arc_res.clone();
 
-        arc_res.lock().map_err(|_| "unexpected error")?
-            .rt.as_ref().unwrap()
+        arc_res
+            .lock()
+            .map_err(|_| "unexpected error")?
+            .rt
+            .as_ref()
+            .unwrap()
             .spawn(Self::ble_loop(arc_res_2));
         Ok(Self {
             res: arc_res,
-            read_timeout
+            read_timeout,
         })
     }
 
@@ -117,21 +123,21 @@ impl BleSerial {
             return Err(self.baud_rate());
         }
 
-        let lck_res = self.res.lock()
-            .map_err(|_| None)?;
+        let lck_res = self.res.lock().map_err(|_| None)?;
         if lck_res.ch_req.is_none() || lck_res.dev_name.is_none() {
             return Err(None);
         }
-        lck_res.ch_req.as_ref().unwrap()
+        lck_res
+            .ch_req
+            .as_ref()
+            .unwrap()
             .send(BleHdlMsg::ReqSetBaud(baud))
             .map_err(|_| lck_res.baud_rate)?;
         drop(lck_res);
 
         for _ in 0..10 {
             thread::sleep(Duration::from_millis(1000));
-            let cur_baud = self.res.lock()
-                .map_err(|_| None)?
-                .baud_rate;
+            let cur_baud = self.res.lock().map_err(|_| None)?.baud_rate;
             if Self::baud_acceptable(cur_baud, baud) {
                 return Ok(cur_baud);
             }
@@ -147,243 +153,246 @@ impl BleSerial {
         }
     }
 
-    pub fn on_event(&self, f: impl Fn(BleSerialEvent) + 'static + Send + Sync)
-    -> Result<(), &'static str> {
-        let mut lck_res = self.res.lock()
+    pub fn on_event(
+        &self,
+        f: impl Fn(BleSerialEvent) + 'static + Send + Sync,
+    ) -> Result<(), &'static str> {
+        let mut lck_res = self
+            .res
+            .lock()
             .map_err(|_| "error that shouldn't happen: unable to set event handler")?;
         lck_res.on_event = Arc::new(Box::new(f));
         Ok(())
     }
 
     async fn ble_loop(res: Arc<Mutex<BleSerialRes>>) {
-        #[cfg(feature = "ble_dbg")] println!("ble_loop(): entered.");
-        let dev_addr = res.lock().as_ref().unwrap().dev_addr;
-        let manager = btleplug::platform::Manager::new().await.unwrap();
+        debug!("ble_loop(): entered.");
+
+        let dev_addr = res.lock().as_ref().unwrap().dev_addr.clone();
+
+        // TODO: deal with disabled bluetooth adapter
+        let Some(adapter) = bluest::Adapter::default().await else {
+            debug!("ble_loop(): bluetooth adapter not found.");
+            return;
+        };
+        adapter.wait_available().await.unwrap();
 
         loop {
             // create `req` (external call) message channel as soon as possible
             let (tx_req, mut rx_req) = tokio::sync::mpsc::unbounded_channel::<BleHdlMsg>();
             res.lock().as_mut().unwrap().ch_req.replace(tx_req);
             let mut msg_map = tokio_stream::StreamMap::new();
-            msg_map.insert("req", tokio_stream::StreamNotifyClose::new(
-                Box::pin(async_stream::stream! {
+            msg_map.insert(
+                "req",
+                tokio_stream::StreamNotifyClose::new(Box::pin(async_stream::stream! {
                     while let Some(item) = rx_req.recv().await {
                         yield item;
                     }
-                }) as PinnedMsgStream
-            ));
-            
+                }) as PinnedMsgStream),
+            );
+
             // indicate disconnection
             let prev_name = res.lock().unwrap().dev_name.take();
-            if let Some(_) = prev_name {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): disconnected.");
+            if prev_name.is_some() {
+                debug!("ble_loop(): disconnected.");
                 Self::raise_event(&res, BleSerialEvent::Disconnect);
             }
 
             // avoid useless retrying if the bluetooth device is not present
             tokio::time::sleep(Duration::from_millis(1500)).await;
 
-            // get BLE adapter handler and start scan for the device
-            let central = {
-                let adapters = manager.adapters().await;
-                if adapters.is_err() {
-                    #[cfg(feature = "ble_dbg")] println!("ble_loop(): cannot find BLE adapter.");
-                    continue;
-                }
-                let central = adapters.unwrap().into_iter().nth(0);
-                if central.is_none() {
-                    #[cfg(feature = "ble_dbg")] println!("ble_loop(): BLE adapter not found.");
-                    continue;
-                }
-                central.unwrap()
-            };
-            let scan_filter = btleplug::api::ScanFilter {
-                services: vec![UUID_SERV]
-            };
-            if central.start_scan(scan_filter).await.is_err() {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): start_scan() failed.");
+            let filter = [UUID_SERV];
+            let Ok(mut discoverer) = adapter.discover_devices(&filter).await else {
+                debug!("ble_loop(): discover_devices failed.");
                 continue;
-            }
-            #[cfg(feature = "ble_dbg")] println!("ble_loop(): started scanning.");
+            };
+            debug!("ble_loop(): started discovering.");
 
             // check the device's MAC address
-            let mut periph = None;
+            let mut device = None;
             'outer: for _ in 0..10 {
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                let periphs = if let Ok(periphs) = central.peripherals().await {
-                    periphs
-                } else {
-                    #[cfg(feature = "ble_dbg")]
-                        println!("ble_loop(): failed to get peripherals list, retrying.");
-                    continue;
-                };
-                for per in periphs {
-                    #[cfg(feature = "ble_dbg")]
-                        println!("ble_loop(): found {}.", &per.address().to_string());
-                    if per.address() == dev_addr {
-                        periph = Some(per); break 'outer;
+                while let Some(Ok(dev)) = discoverer.next().await {
+                    let id = dev.id().to_string();
+                    println!("ble_loop(): found {}.", &id);
+                    if id.to_lowercase().contains(&dev_addr.to_lowercase()) {
+                        device = Some(dev);
+                        break 'outer;
                     }
                 }
             }
-            if periph.is_none() {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): target device not found.");
+            let Some(device) = device else {
+                debug!("ble_loop(): target device not found.");
                 continue;
-            }
-            let periph = periph.unwrap();
-            let _ = central.stop_scan().await;
+            };
+            drop(discoverer);
 
             // connect and get the characteristics
-            if periph.connect().await.is_err() {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): failed to connect.");
+            if adapter.connect_device(&device).await.is_err() {
+                debug!("ble_loop(): failed to connect.");
                 continue;
             }
-            if periph.discover_services().await.is_err() {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): failed to discover services.");
+            if device.discover_services().await.is_err() {
+                debug!("ble_loop(): failed to discover services (unexpected).");
                 continue;
             }
-            let chars = periph.characteristics();
+            let Ok(services) = device.services().await else {
+                debug!("ble_loop(): cannot get device services (unexpected).");
+                continue;
+            };
+            let Some(service) = services.iter().find(|serv| serv.uuid() == UUID_SERV) else {
+                debug!("ble_loop(): cannot find the correct service (unexpected).");
+                continue;
+            };
+            let Ok(chars) = service.characteristics().await else {
+                debug!("ble_loop(): cannot get service characteristics (unexpected).");
+                continue;
+            };
             let (char_baud, char_read, char_write) = {
-                let ch_baud  = chars.iter().find(|c| c.uuid == UUID_CHAR_BAUD);
-                let ch_read  = chars.iter().find(|c| c.uuid == UUID_CHAR_READ);
-                let ch_write = chars.iter().find(|c| c.uuid == UUID_CHAR_WRITE);
+                let (mut ch_baud, mut ch_read, mut ch_write) = (None, None, None);
+                for ch in chars {
+                    match ch.uuid() {
+                        UUID_CHAR_BAUD => ch_baud.replace(ch),
+                        UUID_CHAR_READ => ch_read.replace(ch),
+                        UUID_CHAR_WRITE => ch_write.replace(ch),
+                        _ => None,
+                    };
+                }
                 if ch_baud.is_none() || ch_read.is_none() || ch_write.is_none() {
-                    #[cfg(feature = "ble_dbg")] println!("ble_loop(): incorrect characters.");
+                    debug!("ble_loop(): incorrect characteristics.");
                     continue;
                 }
                 (ch_baud.unwrap(), ch_read.unwrap(), ch_write.unwrap())
             };
 
-            if let Some(baud) = Self::periph_read_baud(&periph, &char_baud).await {
+            if let Some(baud) = Self::read_baud(&char_baud).await {
                 res.lock().unwrap().baud_rate = baud;
             } else {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): failed to check baud rate.");
+                debug!("ble_loop(): failed to check baud rate.");
                 continue;
             }
 
             // enable read notification
-            let desc_char_conf = char_read.descriptors.iter()
-                .find(|d| d.uuid == UUID_DESC_CLIENT_CHAR_CONF);
-            if desc_char_conf.is_none() {
-                #[cfg(feature = "ble_dbg")]
-                    println!("ble_loop(): failed to get conf desc of char_read.");
-                continue;
-            }
-            if periph.write_descriptor(desc_char_conf.as_ref().unwrap(),
-                &[0x01, 0x00] //enable notification
-            ).await.is_err() {
-                #[cfg(feature = "ble_dbg")]
-                    println!("ble_loop(): failed to write conf desc of char_read.");
-            }
-            
-            // create UART read notification stream
-            if periph.subscribe(&char_read).await.is_err() {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): failed to subscribe char_read.");
-                continue;
-            }
-            let mut stream_notify_read = if let Ok(stream_read) = periph.notifications().await {
-                stream_read
-            } else {
-                #[cfg(feature = "ble_dbg")] println!("ble_loop(): failed to get notification stream.");
+            let Some(desc_char_conf) = char_read.descriptors().await.ok().and_then(|descs| {
+                descs
+                    .into_iter()
+                    .find(|d| d.uuid() == UUID_DESC_CLIENT_CHAR_CONF)
+            }) else {
+                debug!("ble_loop(): failed to get conf desc of char_read.");
                 continue;
             };
-            msg_map.insert("read", tokio_stream::StreamNotifyClose::new(
-                Box::pin(async_stream::stream! {
+            if desc_char_conf.write(&[0x01, 0x00]).await.is_err() {
+                // enable notification
+                debug!("ble_loop(): failed to write conf desc of char_read.");
+            }
+
+            // create UART read notification stream
+
+            msg_map.insert(
+                "read",
+                tokio_stream::StreamNotifyClose::new(Box::pin(async_stream::stream! {
                     use futures::stream::StreamExt;
-                    while let Some(item) = stream_notify_read.next().await {
+                    // XXX: remove this `unwrap()`.
+                    let mut stream_notify_read = char_read.notify().await.unwrap();
+                    while let Some(Ok(item)) = stream_notify_read.next().await {
                         yield BleHdlMsg::ReadNotify(item);
                     }
-                }) as PinnedMsgStream
-            ));
-            msg_map.insert("timer", tokio_stream::StreamNotifyClose::new(
-                Box::pin(async_stream::stream! {
+                }) as PinnedMsgStream),
+            );
+            msg_map.insert(
+                "timer",
+                tokio_stream::StreamNotifyClose::new(Box::pin(async_stream::stream! {
                     loop {
                         tokio::time::sleep(Duration::from_millis(2000)).await;
                         yield BleHdlMsg::Timer;
                     }
-                }) as PinnedMsgStream
-            ));
+                }) as PinnedMsgStream),
+            );
 
             // get device name and indicate for connection
-            let mut dev_name = "unknown".to_string();
-            if let Ok(properties) = periph.properties().await {
-                dev_name = properties.unwrap().local_name.unwrap_or(dev_name);
-            }
+            let dev_name = device.name_async().await.unwrap_or("unknown".to_string());
             res.lock().unwrap().dev_name.replace(dev_name);
             Self::raise_event(&res, BleSerialEvent::Connect);
 
             // handle messages
             while let Some((key, msg)) = msg_map.next().await {
                 if msg.is_none() {
-                    #[cfg(feature = "ble_dbg")] println!("ble_loop(): stream {key} ends, breaking.");
-                    break; //the BLE connection is broken, or the req stream is broken
+                    debug!("ble_loop(): stream {key} ends, breaking.");
+                    break; // the BLE connection is broken, or the req stream is broken
                 }
                 let msg = msg.unwrap();
-                if key == "read" { //read notification
-                    if let BleHdlMsg::ReadNotify(n) = msg {
-                        if n.uuid != UUID_CHAR_READ { continue; }
-                        res.lock().as_mut().unwrap().buf_read.write(&n.value).unwrap();
-                        Self::raise_event(&res, BleSerialEvent::Receive(n.value));
+                if key == "read" {
+                    // read notification
+                    if let BleHdlMsg::ReadNotify(data) = msg {
+                        // With `VecDeque`, all data should be written into it
+                        let _ = res.lock().as_mut().unwrap().buf_read.write(&data).unwrap();
+                        Self::raise_event(&res, BleSerialEvent::Receive(data));
                     }
                     continue;
-                } else if key == "timer" { //connection checker
-                    // TODO: check for disabled bluetooth (adapter is probably still available in btleplug!)
-                    if ! periph.is_connected().await.unwrap_or(false) {
-                        #[cfg(feature = "ble_dbg")] println!("ble_loop(): disconnected, breaking.");
+                } else if key == "timer" {
+                    // connection checker
+                    // TODO: check for disabled bluetooth (adapter is probably still available in bluest!)
+                    if !device.is_connected().await {
+                        debug!("ble_loop(): disconnected, breaking.");
                         break;
                     }
                     continue;
                 }
-                match msg { //request message
+                match msg {
+                    // request message
                     BleHdlMsg::ReqSetBaud(baud) => {
                         for _ in 0..3 {
-                            if periph.write(
-                                &char_baud, &baud.to_le_bytes(), WriteType::WithoutResponse
-                            ).await.is_ok() { break; }
+                            if char_baud
+                                .write_without_response(&baud.to_le_bytes())
+                                .await
+                                .is_ok()
+                            {
+                                break;
+                            }
                         }
                         let mut suc = false;
                         for _ in 0..10 {
-                            let cur_baud = Self::periph_read_baud(&periph, &char_baud).await.unwrap_or(0);
+                            let cur_baud = Self::read_baud(&char_baud).await.unwrap_or(0);
                             if Self::baud_acceptable(cur_baud, baud) {
-                                #[cfg(feature = "ble_dbg")] println!("ble_loop(): baudrate set.");
+                                debug!("ble_loop(): baudrate set.");
                                 res.lock().unwrap().baud_rate = cur_baud;
-                                suc = true; break;
+                                suc = true;
+                                break;
                             } else {
                                 tokio::time::sleep(Duration::from_millis(400)).await;
                             }
                         }
-                        if ! suc {
-                            #[cfg(feature = "ble_dbg")]
-                            println!("ble_loop(): failed to set baud rate.");
+                        if !suc {
+                            debug!("ble_loop(): failed to set baud rate.");
                         }
-                    },
+                    }
                     BleHdlMsg::ReqWrite(data) => {
                         // TODO: handle larger data block to be sent
                         let mut suc = false;
                         for _ in 0..3 {
-                            if periph.write(
-                                &char_write, &data, WriteType::WithResponse
-                            ).await.is_ok() {
-                                suc = true; break;
+                            if char_write.write(&data).await.is_ok() {
+                                suc = true;
+                                break;
                             }
                         }
-                        if ! suc {
-                            #[cfg(feature = "ble_dbg")] println!("ble_loop(): write failed.");
+                        if !suc {
+                            debug!("ble_loop(): write failed.");
                             Self::raise_event(&res, BleSerialEvent::WriteFailed(data));
                         }
-                    },
+                    }
                     BleHdlMsg::ReqDrop => {
-                        #[cfg(feature = "ble_dbg")] println!("ble_loop(): ready to be dropped, return.");
+                        debug!("ble_loop(): ready to be dropped, return.");
                         return;
-                    },
+                    }
                     _ => (),
                 }
             }
         }
     }
 
-    async fn periph_read_baud(periph: &Peripheral, char_baud: &Characteristic) -> Option<u32> {
+    async fn read_baud(char_baud: &Characteristic) -> Option<u32> {
         for _ in 0..3 {
-            if let Ok(bytes_baud) = periph.read(char_baud).await {
+            if let Ok(bytes_baud) = char_baud.read().await {
                 if bytes_baud.len() < 4 {
                     continue;
                 }
@@ -401,7 +410,9 @@ impl BleSerial {
         let mut lck_res = res.lock().unwrap();
         let on_event = lck_res.on_event.clone();
         let rt = lck_res.rt.take();
-        if rt.is_none() { return; }
+        if rt.is_none() {
+            return;
+        }
         drop(lck_res);
 
         rt.as_ref().unwrap().spawn_blocking(move || on_event(evt));
@@ -409,21 +420,27 @@ impl BleSerial {
     }
 
     fn baud_acceptable(baud: u32, baud_expected: u32) -> bool {
-        if baud == 0 || baud_expected == 0 { return false; }
-        let t_baud = 1./(baud as f64);
-        let t_baud_exp = 1./(baud_expected as f64);
+        if baud == 0 || baud_expected == 0 {
+            return false;
+        }
+        let t_baud = 1. / (baud as f64);
+        let t_baud_exp = 1. / (baud_expected as f64);
         f64::abs(t_baud - t_baud_exp) / t_baud_exp <= 0.05
     }
 }
 
 impl Read for BleSerial {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if buf.len() == 0 { return Ok(0); }
+        if buf.is_empty() {
+            return Ok(0);
+        }
 
         let t_timeout = SystemTime::now() + self.read_timeout;
         let mut cnt_read = 0;
         while cnt_read < buf.len() {
-            let mut lck_res = self.res.lock()
+            let mut lck_res = self
+                .res
+                .lock()
                 .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
             if let Ok(cnt) = lck_res.buf_read.read(&mut buf[cnt_read..]) {
                 cnt_read += cnt;
@@ -431,7 +448,9 @@ impl Read for BleSerial {
             drop(lck_res);
             if SystemTime::now() < t_timeout {
                 thread::sleep(Duration::from_millis(30));
-            } else { break; }
+            } else {
+                break;
+            }
         }
 
         if cnt_read == 0 {
@@ -444,17 +463,24 @@ impl Read for BleSerial {
 
 impl Write for BleSerial {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if buf.len() == 0 { return Ok(0); }
+        if buf.is_empty() {
+            return Ok(0);
+        }
 
-        let lck_res = self.res.lock()
+        let lck_res = self
+            .res
+            .lock()
             .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
 
         if lck_res.ch_req.is_none() || lck_res.dev_name.is_none() {
             return Err(io::Error::from(io::ErrorKind::NotConnected));
         }
-        lck_res.ch_req.as_ref().unwrap()
+        lck_res
+            .ch_req
+            .as_ref()
+            .unwrap()
             .send(BleHdlMsg::ReqWrite(buf.to_vec()))
-            .map_err(|e| io::Error::other(e))?;
+            .map_err(io::Error::other)?;
         Ok(buf.len())
     }
 
@@ -465,15 +491,16 @@ impl Write for BleSerial {
 
 impl Drop for BleSerial {
     fn drop(&mut self) {
-        #[cfg(feature = "ble_dbg")] println!("BleSerial::drop(): entered.");
+        debug!("BleSerial::drop(): entered.");
         if let Ok(mut lck_res) = self.res.lock() {
-        if let Some(ch_req) = lck_res.ch_req.take() {
-        if let Ok(_) = ch_req.send(BleHdlMsg::ReqDrop) {
-            let rt = lck_res.rt.take().unwrap();
-            drop(lck_res);
-            rt.shutdown_timeout(Duration::from_millis(2000));
-            #[cfg(feature = "ble_dbg")]
-                println!("BleSerial::drop(): shutdown_timeout() called.");
-        }}}
+            if let Some(ch_req) = lck_res.ch_req.take() {
+                if ch_req.send(BleHdlMsg::ReqDrop).is_ok() {
+                    let rt = lck_res.rt.take().unwrap();
+                    drop(lck_res);
+                    rt.shutdown_timeout(Duration::from_millis(2000));
+                    debug!("BleSerial::drop(): shutdown_timeout() called.");
+                }
+            }
+        }
     }
 }

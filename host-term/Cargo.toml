@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-btleplug = "0.11.5"
-# btleplug = { path = "./btleplug-0.11.5" }
-
+bluest = "0.6.7"
 futures = "0.3.30"
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.16"
@@ -19,8 +17,9 @@ name = "rtl8762c_ble_uart_host"
 path = "lib.rs"
 
 [features]
-# default = ["ble_dbg"]
-ble_dbg = []
+default = []
+# default = ["debug"]
+debug = []
 
 [[bin]]
 name = "rtl8762c-bleser"
