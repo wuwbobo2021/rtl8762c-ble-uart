@@ -17,17 +17,6 @@ Usage: -u <device_uuid> [-b <baud_rate>] [-h]
 ";
 
 fn main() {
-    use tracing_subscriber::prelude::*;
-    use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
-
     let (dev_bt_addr, baud_rate, read_timeout_ms, hex_mode, clear_on_disc) = {
         let mut dev_bt_addr: Option<String> = None;
         let mut baud_rate: Option<u32> = None;
